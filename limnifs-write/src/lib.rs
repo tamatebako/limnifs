@@ -241,6 +241,7 @@ pub fn write_stream<R: std::io::Read>(
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.shared_inline_enabled = config.defaults.shared_inline;
 
     // Synthesise a single PendingFile that points to nothing on disk;
     // we'll bypass process_file's `std::fs::read` and feed the
@@ -381,6 +382,7 @@ pub fn write_layer(
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.shared_inline_enabled = config.defaults.shared_inline;
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
     ctx.base_drop_index = Some(base_drop_index);
@@ -548,6 +550,7 @@ pub fn write_directory_with_config(
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.shared_inline_enabled = config.defaults.shared_inline;
 
     write_directory_streaming(&mut ctx, root, config)?;
     Ok(ctx.assemble())
@@ -1168,6 +1171,11 @@ struct WriteContext {
     classifier: classifier::Classifier,
     shared_inline_map: HashMap<[u8; 32], usize>,
     shared_inline_table: Vec<Vec<u8>>,
+    /// Whether to build the shared-inline dedup table (and tag inodes
+    /// with `INODE_FLAG_SHARED_INLINE`). From
+    /// `WriteConfig::defaults::shared_inline`; false keeps the image
+    /// mountable on pre-0.2.53 readers (limnifs#186/#189).
+    shared_inline_enabled: bool,
     /// Profile name for ProfileDescriptor emission (None = omit section).
     profile_name: Option<String>,
     /// Metadata blob codec (defaults to Brotli; can be overridden via
@@ -1243,6 +1251,7 @@ impl WriteContext {
             classifier: classifier::Classifier,
             shared_inline_map: HashMap::new(),
             shared_inline_table: Vec::new(),
+            shared_inline_enabled: true,
             profile_name: None,
             metadata_codec: limnifs_core::codec::CODEC_BROTLI,
             categorizers_disabled: false,
@@ -1267,8 +1276,15 @@ impl WriteContext {
 
     /// Scan all inline-data inodes and build a dedup table. Only
     /// content appearing in > 1 inode is deduplicated; unique inline
-    /// data stays inline (no overhead change).
+    /// data stays inline (no overhead change). No-op when
+    /// `shared_inline_enabled` is false: the table stays empty, so
+    /// `encode_inode` never sets `INODE_FLAG_SHARED_INLINE` (0x08) —
+    /// the image mounts on pre-0.2.53 readers whose reserved-flag mask
+    /// rejects that bit (limnifs#186/#189).
     fn build_shared_inline_table(&mut self) {
+        if !self.shared_inline_enabled {
+            return;
+        }
         let mut counts: HashMap<[u8; 32], usize> = HashMap::new();
         for inode in &self.inodes {
             if let PendingContent::Inline(data) = &inode.content {
@@ -2371,6 +2387,37 @@ mod tests {
         assert_eq!(artifact.file_count, 2);
         assert_eq!(artifact.drop_count, 1);
         assert_eq!(artifact.slabs.len(), 1);
+    }
+
+    #[test]
+    fn shared_inline_gate_skips_or_builds_the_table() {
+        // limnifs#189: with the knob off the table stays empty, so
+        // `encode_inode` can never set INODE_FLAG_SHARED_INLINE (0x08)
+        // and the image mounts on pre-0.2.53 readers (limnifs#186).
+        let dup = vec![0x5Au8; 300];
+        for (enabled, want_table_len) in [(false, 0usize), (true, 1)] {
+            let mut ctx = WriteContext::new();
+            ctx.shared_inline_enabled = enabled;
+            for number in 1..=3u64 {
+                ctx.inodes.push(PendingInode {
+                    number,
+                    mode: 0o100644,
+                    mtime_ns: 0,
+                    content: PendingContent::Inline(dup.clone()),
+                });
+            }
+            ctx.build_shared_inline_table();
+            assert_eq!(
+                ctx.shared_inline_table.len(),
+                want_table_len,
+                "shared_inline_enabled={enabled}"
+            );
+            assert_eq!(
+                ctx.shared_inline_map.is_empty(),
+                !enabled,
+                "shared_inline_enabled={enabled}"
+            );
+        }
     }
 
     #[test]

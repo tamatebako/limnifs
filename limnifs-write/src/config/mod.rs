@@ -116,6 +116,10 @@ fn default_metadata_externalize_threshold() -> usize {
     crate::METADATA_EXTERNALIZE_THRESHOLD
 }
 
+fn default_shared_inline() -> bool {
+    true
+}
+
 /// Default codec + quality settings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Defaults {
@@ -131,6 +135,15 @@ pub struct Defaults {
     /// keep manifests small. See limnifs#187.
     #[serde(default = "default_metadata_externalize_threshold")]
     pub metadata_externalize_threshold: usize,
+    /// Emit the shared-inline dedup table and tag duplicated inline
+    /// inodes with `INODE_FLAG_SHARED_INLINE` (0x08). Default: true
+    /// (upstream behaviour). Set false for images that must mount on
+    /// pre-0.2.53 readers: their `INODE_FLAG_RESERVED_MASK = 0xF8`
+    /// covers bit 3 and rejects such inodes (limnifs#186). The
+    /// metadata blob is whole-blob compressed, so re-inlined duplicate
+    /// blobs cost ~nothing on the wire. See limnifs#189.
+    #[serde(default = "default_shared_inline")]
+    pub shared_inline: bool,
     /// Inline data threshold (bytes).
     pub inline_threshold: u16,
 }
@@ -392,6 +405,7 @@ impl WriteConfig {
                 metadata_codec: DEFAULT_METADATA_CODEC.to_string(),
                 metadata_quality: DEFAULT_METADATA_QUALITY,
                 metadata_externalize_threshold: crate::METADATA_EXTERNALIZE_THRESHOLD,
+                shared_inline: true,
                 inline_threshold: DEFAULT_INLINE_THRESHOLD,
             },
             categorizers: Vec::new(),

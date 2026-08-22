@@ -97,4 +97,55 @@ max_dict_size = 65536
         assert_eq!(config.text_codec_id().unwrap(), 0x04);
         assert_eq!(config.binary_codec_id().unwrap(), 0x01);
     }
+
+    const MINIMAL_TOML: &str = r#"
+[defaults]
+text_codec = "brotli"
+binary_codec = "lz4"
+metadata_codec = "brotli"
+metadata_quality = 5
+inline_threshold = 4096
+
+[chunking]
+avg_chunk_size = 8192
+min_chunk_size = 1024
+max_chunk_size = 65536
+
+[tournament]
+codecs = ["store", "lz4", "zstd", "brotli"]
+min_size_threshold = 256
+skip_for_binary = true
+
+[encryption]
+aead = "chacha20-poly1305"
+key_wrap = "x25519-hkdf"
+
+[dictionaries]
+enabled = true
+min_class_size = 100
+max_dict_size = 65536
+"#;
+
+    #[test]
+    fn shared_inline_defaults_true_when_absent() {
+        let config: WriteConfig = toml::from_str(MINIMAL_TOML).expect("parse");
+        assert!(
+            config.defaults.shared_inline,
+            "absent key must keep the upstream default (table emitted)"
+        );
+    }
+
+    #[test]
+    fn shared_inline_false_round_trips() {
+        let toml = MINIMAL_TOML.replace(
+            "inline_threshold = 4096",
+            "inline_threshold = 4096\nshared_inline = false",
+        );
+        let config: WriteConfig = toml::from_str(&toml).expect("parse");
+        assert!(!config.defaults.shared_inline);
+        let s = config.to_toml().expect("serialise");
+        let reparsed: WriteConfig = toml::from_str(&s).expect("reparse");
+        assert!(!reparsed.defaults.shared_inline);
+        assert_eq!(reparsed, config);
+    }
 }

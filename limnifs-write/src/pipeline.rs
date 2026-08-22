@@ -75,6 +75,7 @@ pub fn write_directory_with_pipeline(
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.shared_inline_enabled = config.defaults.shared_inline;
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
 
